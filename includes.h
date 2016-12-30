@@ -2,6 +2,29 @@
 #include <math.h>
 #include <stdint.h>
 
+
+typedef struct
+{
+    double x;
+    double y;
+    double z;
+} Point;
+
+typedef struct
+{
+    Point point; // location of the sensor on the tracked object;
+    Point normal; // unit vector indicating the normal for the sensor
+    unsigned int theta; // "horizontal" angular measurement from lighthouse in tics.  48 Million tics per second.
+    unsigned int phi; // "vertical" angular measurement from lighthouse in tics.
+} TrackedSensor;
+
+typedef struct
+{
+    size_t numSensors;
+    TrackedSensor sensor[0];
+} TrackedObject;
+
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846264338327
 #endif
@@ -32,18 +55,12 @@ static const double TOROIDAL_PRECISON = M_PI / 90; // i.e. 2 degrees
 //static const double POLOIDAL_PRECISON = M_PI / 90 * 6; // i.e. 12 degrees
 //static const double TOROIDAL_PRECISON = M_PI / 90 * 6; // i.e. 12 degrees
 
-typedef struct
-{
-    double x;
-    double y;
-    double z;
-} Point;
 
-typedef struct
-{
-    size_t numPoints;
-    Point point[MAX_TRACKED_POINTS]; // lazy, but simple.
-} TrackedObject;
+//typedef struct
+//{
+//    size_t numPoints;
+//    Point point[MAX_TRACKED_POINTS]; // lazy, but simple.
+//} TrackedObject;
 
 double distance(Point a, Point b)
 {
@@ -240,3 +257,4 @@ static void axis_angle_normalized_to_mat3_ex(
     mat[2][1] = n_12 - nsi[0];
     mat[2][2] = n_22 + angle_cos;
 }
+

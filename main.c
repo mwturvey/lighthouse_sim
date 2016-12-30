@@ -273,6 +273,13 @@ Point findBestPointMatch(Point *masterCloud, Point** clouds, int numClouds)
     return bestMatch;
 }
 
+
+
+Point SolveForLighthouse(TrackedObject obj)
+{
+
+}
+
 int main()
 {
     FILE *f = fopen("pointcloud.pcd", "wb");

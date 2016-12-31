@@ -6,7 +6,27 @@
 
 static int pointsWritten = 0;
 
-
+#define MAX_COLORS 18
+static unsigned int COLORS[] = {
+    0x00FFFF,
+    0xFF00FF,
+    0xFFFF00,
+    0xFF0000,
+    0x00FF00,
+    0x0000FF,
+    0x0080FF,
+    0x8000FF,
+    0x80FF00,
+    0x00FF80,
+    0xFF0080,
+    0xFF8000,
+    0x008080,
+    0x800080,
+    0x808000,
+    0x000080,
+    0x008000,
+    0x800000
+};
 Matrix3x3 GetRotationMatrixForTorus(Point a, Point b)
 {
     Matrix3x3 result;
@@ -25,7 +45,7 @@ Point RotateAndTranslatePoint(Point p, Matrix3x3 rot, Point newOrigin)
     Point q;
 
     float pf[3] = { p.x, p.y, p.z };
-    float pq[3];
+    //float pq[3];
 
     //q.x = rot.val[0][0] * p.x + rot.val[0][1] * p.y + rot.val[0][2] * p.z + newOrigin.x;
     //q.y = rot.val[1][0] * p.x + rot.val[1][1] * p.y + rot.val[1][2] * p.z + newOrigin.y;
@@ -274,14 +294,180 @@ Point findBestPointMatch(Point *masterCloud, Point** clouds, int numClouds)
 }
 
 
+#define MAX_POINT_PAIRS 100
 
-Point SolveForLighthouse(TrackedObject obj)
+typedef struct
 {
+    Point a;
+    Point b;
+    double angle;
+} PointsAndAngle;
 
+double angleBetweenSensors(TrackedSensor *a, TrackedSensor *b)
+{
+    double angle = acos(cos(a->phi - b->phi)*cos(a->theta - b->theta));
+    double angle2 = acos(cos(b->phi - a->phi)*cos(b->theta - a->theta));
+
+    return angle;
+}
+
+Point SolveForLighthouse(TrackedObject *obj)
+{
+    PointsAndAngle pna[MAX_POINT_PAIRS];
+    Point lh = { 100, 20, 5 };
+
+    size_t pnaCount = 0;
+    // TODO: Need a better way of picking the pairs to use that more does a better job
+    // picking each sensor a more even amount of time (and maybe also looking for point pairs 
+    // that would result in a more diverse set of vectors to better calculate position.
+    for (unsigned int i = 0; i < obj->numSensors; i++)
+    {
+        for (unsigned int j = 0; j < i; j++)
+        {
+            if ( pnaCount < MAX_POINT_PAIRS)
+            {
+                pna[pnaCount].a = obj->sensor[i].point;
+                pna[pnaCount].b = obj->sensor[j].point;
+
+                pna[pnaCount].angle = angleBetweenSensors(&obj->sensor[i], &obj->sensor[j]);
+
+                float pythAngle = sqrt(SQUARED(obj->sensor[i].phi - obj->sensor[j].phi) + SQUARED(obj->sensor[i].theta - obj->sensor[j].theta));
+
+                double tmp = angleFromPoints(pna[pnaCount].a, pna[pnaCount].b, lh);
+
+                int a=4;
+
+                pnaCount++;
+            }
+        }
+    }
+
+    Point **pointCloud = malloc(sizeof(Point*)* pnaCount);
+
+    FILE *f = fopen("pointcloud2.pcd", "wb");
+    writePcdHeader(f);
+    writeAxes(f);
+
+    for (int i = 0; i < pnaCount; i++)
+    {
+        torusGenerator(pna[i].a, pna[i].b, pna[i].angle, &(pointCloud[i]));
+        writePointCloud(f, pointCloud[i], COLORS[i%MAX_COLORS]);
+
+    }
+    //Point *pointCloud_ab = NULL;
+    //Point *pointCloud_ac = NULL;
+    //Point *pointCloud_bc = NULL;
+    //Point *pointCloud_ad = NULL;
+    //Point *pointCloud_bd = NULL;
+    //Point *pointCloud_cd = NULL;
+    //torusGenerator(a, b, angleFromPoints(a, b, lh), &pointCloud_ab);
+    //torusGenerator(a, c, angleFromPoints(a, c, lh), &pointCloud_ac);
+    //torusGenerator(b, c, angleFromPoints(b, c, lh), &pointCloud_bc);
+    //torusGenerator(a, d, angleFromPoints(a, d, lh), &pointCloud_ad);
+    //torusGenerator(b, d, angleFromPoints(b, d, lh), &pointCloud_bd);
+    //torusGenerator(c, d, angleFromPoints(c, d, lh), &pointCloud_cd);
+
+
+    markPointWithStar(f, lh, 0xFF0000);
+
+    //drawLineBetweenPoints(f, a, b, 255);
+    //drawLineBetweenPoints(f, b, c, 255);
+    //drawLineBetweenPoints(f, a, c, 255);
+    //drawLineBetweenPoints(f, a, d, 255);
+    //drawLineBetweenPoints(f, b, d, 255);
+    //drawLineBetweenPoints(f, c, d, 255);
+
+    Point bestMatchA = findBestPointMatch(pointCloud[0], pointCloud, pnaCount);
+
+    markPointWithStar(f, bestMatchA, 0xFFFFFF);
+
+    updateHeader(f);
+
+    fclose(f);
+
+}
+
+static Point makeUnitPoint(Point *p)
+{
+    Point newP;
+    float r = sqrt(p->x*p->x + p->y*p->y + p->z*p->z);
+    newP.x = p->x / r;
+    newP.y = p->y / r;
+    newP.z = p->z / r;
+
+    return newP;
+}
+
+static float getPhi(Point p)
+{
+    float phi = acos(p.z / (sqrt(p.x*p.x + p.y*p.y + p.z*p.z)));
+//    float phi = atan(sqrt(p.x*p.x + p.y*p.y)/p.z);
+    return phi;
+}
+
+static float getTheta(Point p)
+{
+    float theta = atan(p.y / p.x);
+    return theta;
+}
+
+// subtraction
+static Point PointSub(Point a, Point b)
+{
+    Point newPoint;
+
+    newPoint.x = a.x - b.x;
+    newPoint.y = a.y - b.y;
+    newPoint.z = a.z - b.z;
+
+    return newPoint;
 }
 
 int main()
 {
+
+    //Point lh = { 0, 0, 0 };
+    Point lh = { 100, 20, 5 };
+
+    TrackedObject *to;
+
+    to = malloc(sizeof(TrackedObject)+4 * sizeof(TrackedSensor));
+
+    to->numSensors = 4;
+    to->sensor[0].point.x = 5.0;
+    to->sensor[0].point.y = 0.00001;
+    to->sensor[0].point.z = 0.00001;
+
+    to->sensor[1].point.x = 0.00001;
+    to->sensor[1].point.y = 5.00001;
+    to->sensor[1].point.z = 0.00001;
+
+    to->sensor[2].point.x = 0.00001;
+    to->sensor[2].point.y = 0.00001;
+    to->sensor[2].point.z = 5.00001;
+
+    to->sensor[3].point.x = 0.00001;
+    to->sensor[3].point.y = 5.00001;
+    to->sensor[3].point.z = 5.00001;
+
+    for (int i = 0; i < to->numSensors; i++)
+    {
+        float tmp = getTheta(PointSub(to->sensor[i].point, lh));
+        float tmp2 = getPhi(PointSub(to->sensor[i].point, lh));
+
+        float tmpD = tmp * 180 / M_PI;
+        float tmp2D = tmp2 * 180 / M_PI;
+
+        to->sensor[i].theta = getTheta(PointSub(to->sensor[i].point, lh));
+        to->sensor[i].phi = getPhi(PointSub(to->sensor[i].point, lh));
+        int a = 0;
+    }
+
+
+    Point foundLh = SolveForLighthouse(to);
+
+
+
     FILE *f = fopen("pointcloud.pcd", "wb");
 
     Point a = { 5.0, 0.0 , 0};
@@ -290,7 +476,6 @@ int main()
     Point c = { 0, 0, 5.0 };
     Point d = { 0, 5, 5.0 };
     //Point lh = { 50, 50, 50 };
-    Point lh = { 100, 20, 40 };
 
 
     Point *pointCloud_ab = NULL;

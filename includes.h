@@ -14,8 +14,8 @@ typedef struct
 {
     Point point; // location of the sensor on the tracked object;
     Point normal; // unit vector indicating the normal for the sensor
-    unsigned int theta; // "horizontal" angular measurement from lighthouse in tics.  48 Million tics per second.
-    unsigned int phi; // "vertical" angular measurement from lighthouse in tics.
+    float theta; // "horizontal" angular measurement from lighthouse radians
+    float phi; // "vertical" angular measurement from lighthouse in radians.
 } TrackedSensor;
 
 typedef struct

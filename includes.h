@@ -14,8 +14,8 @@ typedef struct
 {
     Point point; // location of the sensor on the tracked object;
     Point normal; // unit vector indicating the normal for the sensor
-    float theta; // "horizontal" angular measurement from lighthouse radians
-    float phi; // "vertical" angular measurement from lighthouse in radians.
+    double theta; // "horizontal" angular measurement from lighthouse radians
+    double phi; // "vertical" angular measurement from lighthouse in radians.
 } TrackedSensor;
 
 typedef struct

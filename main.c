@@ -310,11 +310,20 @@ double angleBetweenSensors(TrackedSensor *a, TrackedSensor *b)
 
     return angle;
 }
+double pythAngleBetweenSensors2(TrackedSensor *a, TrackedSensor *b)
+{
+    double p = (a->phi - b->phi);
+    double d = (a->theta - b->theta);
 
+    double adjd = sin((a->phi + b->phi) / 2);
+    double adjP = sin((a->theta + b->theta) / 2);
+    double pythAngle = sqrt(SQUARED(p*adjP) + SQUARED(d*adjd));
+    return pythAngle;
+}
 Point SolveForLighthouse(TrackedObject *obj)
 {
     PointsAndAngle pna[MAX_POINT_PAIRS];
-    Point lh = { 100, 20, 5 };
+    Point lh = { 100, 20, 50 };
 
     size_t pnaCount = 0;
     // TODO: Need a better way of picking the pairs to use that more does a better job
@@ -329,7 +338,7 @@ Point SolveForLighthouse(TrackedObject *obj)
                 pna[pnaCount].a = obj->sensor[i].point;
                 pna[pnaCount].b = obj->sensor[j].point;
 
-                pna[pnaCount].angle = angleBetweenSensors(&obj->sensor[i], &obj->sensor[j]);
+                pna[pnaCount].angle = pythAngleBetweenSensors2(&obj->sensor[i], &obj->sensor[j]);
 
                 float pythAngle = sqrt(SQUARED(obj->sensor[i].phi - obj->sensor[j].phi) + SQUARED(obj->sensor[i].theta - obj->sensor[j].theta));
 
@@ -398,16 +407,18 @@ static Point makeUnitPoint(Point *p)
     return newP;
 }
 
-static float getPhi(Point p)
+static double getPhi(Point p)
 {
-    float phi = acos(p.z / (sqrt(p.x*p.x + p.y*p.y + p.z*p.z)));
-//    float phi = atan(sqrt(p.x*p.x + p.y*p.y)/p.z);
+//    double phi = acos(p.z / (sqrt(p.x*p.x + p.y*p.y + p.z*p.z)));
+//    double phi = atan(sqrt(p.x*p.x + p.y*p.y)/p.z);
+    double phi = atan(p.x / p.z);
     return phi;
 }
 
-static float getTheta(Point p)
+static double getTheta(Point p)
 {
-    float theta = atan(p.y / p.x);
+    //double theta = atan(p.y / p.x);
+    double theta = atan(p.x / p.y);
     return theta;
 }
 
@@ -427,7 +438,7 @@ int main()
 {
 
     //Point lh = { 0, 0, 0 };
-    Point lh = { 100, 20, 5 };
+    Point lh = { 100, 20, 50 };
 
     TrackedObject *to;
 
@@ -452,11 +463,11 @@ int main()
 
     for (int i = 0; i < to->numSensors; i++)
     {
-        float tmp = getTheta(PointSub(to->sensor[i].point, lh));
-        float tmp2 = getPhi(PointSub(to->sensor[i].point, lh));
+        double tmp = getTheta(PointSub(to->sensor[i].point, lh));
+        double tmp2 = getPhi(PointSub(to->sensor[i].point, lh));
 
-        float tmpD = tmp * 180 / M_PI;
-        float tmp2D = tmp2 * 180 / M_PI;
+        double tmpD = tmp * 180 / M_PI;
+        double tmp2D = tmp2 * 180 / M_PI;
 
         to->sensor[i].theta = getTheta(PointSub(to->sensor[i].point, lh));
         to->sensor[i].phi = getPhi(PointSub(to->sensor[i].point, lh));

@@ -50,8 +50,12 @@ static RGBValue BLUE = { .Red = 0, .Green = 0, .Blue = 255, .Alpha = 125 };
 
 static const double WORLD_BOUNDS = 100;
 #define MAX_TRACKED_POINTS 40
-static const double POLOIDAL_PRECISON = M_PI / 90; // i.e. 2 degrees
-static const double TOROIDAL_PRECISON = M_PI / 90; // i.e. 2 degrees
+//static const double POLOIDAL_PRECISON = M_PI / 90; // i.e. 2 degrees
+
+//static const float DefaultPointsPerOuterDiameter = 180;
+static const float DefaultPointsPerOuterDiameter = 60;
+
+//static const double TOROIDAL_PRECISON = M_PI / 90; // i.e. 2 degrees
 //static const double POLOIDAL_PRECISON = M_PI / 90 * 6; // i.e. 12 degrees
 //static const double TOROIDAL_PRECISON = M_PI / 90 * 6; // i.e. 12 degrees
 
@@ -77,9 +81,34 @@ typedef struct
 } Matrix3x3;
 
 
+// TODO: optimization potential to do in-place inverse for some places where this is used.
+Matrix3x3 inverseM33(const Matrix3x3 mat)
+{
+    Matrix3x3 newMat;
+    for (int a = 0; a < 3; a++)
+    {
+        for (int b = 0; b < 3; b++)
+        {
+            newMat.val[a][b] = mat.val[a][b];
+        }
+    }
+
+    for (int i = 0; i < 3; i++)
+    {
+        for (int j = i + 1; j < 3; j++)
+        {
+            float tmp = newMat.val[i][j];
+            newMat.val[i][j] = newMat.val[j][i];
+            newMat.val[j][i] = tmp;
+        }
+    }
+
+    return newMat;
+}
 
 //###################################
-// The following code came from http://stackoverflow.com/questions/23166898/efficient-way-to-calculate-a-3x3-rotation-matrix-from-the-rotation-defined-by-tw
+// The following code originally came from 
+//  http://stackoverflow.com/questions/23166898/efficient-way-to-calculate-a-3x3-rotation-matrix-from-the-rotation-defined-by-tw
 // Need to check up on license terms and give proper attribution
 // I think we'll be good with proper attribution, but don't want to assume without checking.
 

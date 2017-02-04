@@ -1,649 +1,16 @@
-#include "includes.h"
-#include <memory.h>
-#include <stdlib.h>
-#include <assert.h>
+
 #include <stdio.h>
-
-static int pointsWritten = 0;
-
-#define MAX_COLORS 18
-static unsigned int COLORS[] = {
-    0x00FFFF,
-    0xFF00FF,
-    0xFFFF00,
-    0xFF0000,
-    0x00FF00,
-    0x0000FF,
-    0x0080FF,
-    0x8000FF,
-    0x80FF00,
-    0x00FF80,
-    0xFF0080,
-    0xFF8000,
-    0x008080,
-    0x800080,
-    0x808000,
-    0x000080,
-    0x008000,
-    0x800000
-};
-Matrix3x3 GetRotationMatrixForTorus(Point a, Point b)
-{
-    Matrix3x3 result;
-    float v1[3] = { 0, 0, 1 };
-    float v2[3] = { a.x - b.x, a.y - b.y, a.z - b.z };
-
-    normalize_v3(v2);
-
-    rotation_between_vecs_to_mat3(result.val, v1, v2);
-
-    return result;
-}
-
-Point RotateAndTranslatePoint(Point p, Matrix3x3 rot, Point newOrigin)
-{
-    Point q;
-
-    float pf[3] = { p.x, p.y, p.z };
-    //float pq[3];
-
-    //q.x = rot.val[0][0] * p.x + rot.val[0][1] * p.y + rot.val[0][2] * p.z + newOrigin.x;
-    //q.y = rot.val[1][0] * p.x + rot.val[1][1] * p.y + rot.val[1][2] * p.z + newOrigin.y;
-    //q.z = rot.val[2][0] * p.x + rot.val[2][1] * p.y + rot.val[2][2] * p.z + newOrigin.z;
-    q.x = rot.val[0][0] * p.x + rot.val[1][0] * p.y + rot.val[2][0] * p.z + newOrigin.x;
-    q.y = rot.val[0][1] * p.x + rot.val[1][1] * p.y + rot.val[2][1] * p.z + newOrigin.y;
-    q.z = rot.val[0][2] * p.x + rot.val[1][2] * p.y + rot.val[2][2] * p.z + newOrigin.z;
-
-    return q;
-}
-
-double angleFromPoints(Point p1, Point p2, Point center)
-{
-    Point v1, v2, v1norm, v2norm;
-    v1.x = p1.x - center.x;
-    v1.y = p1.y - center.y;
-    v1.z = p1.z - center.z;
-
-    v2.x = p2.x - center.x;
-    v2.y = p2.y - center.y;
-    v2.z = p2.z - center.z;
-
-    double v1mag = sqrt(v1.x * v1.x + v1.y * v1.y + v1.z * v1.z);
-    v1norm.x = v1.x / v1mag;
-    v1norm.y = v1.y / v1mag;
-    v1norm.z = v1.z / v1mag;
-
-    double v2mag = sqrt(v2.x * v2.x + v2.y * v2.y + v2.z * v2.z);
-    v2norm.x = v2.x / v2mag;
-    v2norm.y = v2.y / v2mag;
-    v2norm.z = v2.z / v2mag;
-
-    double res = v1norm.x * v2norm.x + v1norm.y * v2norm.y + v1norm.z * v2norm.z;
-
-    double angle = acos(res);
-
-    return angle;
-}
-
-Point midpoint(Point a, Point b)
-{
-    Point m;
-    m.x = (a.x + b.x) / 2;
-    m.y = (a.y + b.y) / 2;
-    m.z = (a.z + b.z) / 2;
-
-    return m;
-}
-
-
-
-
-// This is the second incarnation of the torus generator.  It is intended to differ from the initial torus generator by
-// producing a point cloud of a torus where the points density is more uniform across the torus.  This will allow
-// us to be more efficient in finding a solution.
-void partialTorusGenerator(
-    Point p1, 
-    Point p2, 
-    float toroidalStartAngle,  
-    float toroidalEndAngle, 
-    float poloidalStartAngle, 
-    float poloidalEndAngle, 
-    double lighthouseAngle, 
-    double toroidalPrecision,
-    Point **pointCloud)
-{
-    double poloidalRadius = 0;
-    double toroidalRadius = 0;
-
-    Point m = midpoint(p1, p2);
-    double distanceBetweenPoints = distance(p1, p2);
-
-    // ideally should only need to be lighthouseAngle, but increasing it here keeps us from accidentally
-    // thinking the tori converge at the location of the tracked object instead of at the lighthouse.
-    double centralAngleToIgnore = lighthouseAngle * 3;
-
-    Matrix3x3 rot = GetRotationMatrixForTorus(p1, p2);
-
-    toroidalRadius = distanceBetweenPoints / (2 * tan(lighthouseAngle));
-
-    poloidalRadius = sqrt(pow(toroidalRadius, 2) + pow(distanceBetweenPoints / 2, 2));
-
-    float poloidalPrecision = M_PI * 2 / toroidalPrecision;
-
-    unsigned int pointCount = toroidalPrecision * toroidalPrecision / 2 * (toroidalEndAngle - toroidalStartAngle) / (M_PI * 2);
-    //unsigned int pointCount = (unsigned int)(toroidalPrecision *  ((M_PI - lighthouseAngle) * 2 / poloidalPrecision + 1) + 1);
-    // TODO: This calculation of the number of points that we will generate is excessively large (probably by about a factor of 2 or more) We can do better.
-    //float pointEstimate = (pointCount + 1000) * sizeof(Point) * 2 * M_PI / (toroidalEndAngle - toroidalStartAngle);
-    *pointCloud = malloc(pointCount * sizeof(Point));
-
-    assert(0 != *pointCloud);
-
-    (*pointCloud)[pointCount - 1].x = -1000;
-    (*pointCloud)[pointCount - 1].y = -1000;
-    (*pointCloud)[pointCount - 1].z = -1000; // need a better magic number or flag, but this'll do for now.
-
-    size_t currentPoint = 0;
-
-    for (double poloidalStep = poloidalStartAngle; poloidalStep < poloidalEndAngle; poloidalStep += poloidalPrecision)
-    {
-        // here, we specify the number of steps that will occur on the toroidal circle for a given poloidal angle
-        // We do this so our point cloud will have a more even distribution of points across the surface of the torus.
-        float steps = (cos(poloidalStep) + 1) / 2 * toroidalPrecision;
-
-        float step_distance = 2 * M_PI / steps;
-
-        //for (double toroidalStep = 0; toroidalStep < M_PI * 2; toroidalStep += TOROIDAL_PRECISON)
-        for (double toroidalStep = toroidalStartAngle; toroidalStep < toroidalEndAngle; toroidalStep += step_distance)
-        {
-            if (currentPoint >= pointCount - 1)
-            {
-                int a = 0;
-            }
-            assert(currentPoint < pointCount - 1);
-            (*pointCloud)[currentPoint].x = (toroidalRadius + poloidalRadius*cos(poloidalStep))*cos(toroidalStep);
-            (*pointCloud)[currentPoint].y = (toroidalRadius + poloidalRadius*cos(poloidalStep))*sin(toroidalStep);
-            (*pointCloud)[currentPoint].z = poloidalRadius*sin(poloidalStep);
-            (*pointCloud)[currentPoint] = RotateAndTranslatePoint((*pointCloud)[currentPoint], rot, m);
-
-            // TODO: HACK!!! Instead of doing anything with normals, we're "assuming" that all sensors point directly up
-            // and hence we know that nothing with a negative z value is a possible lightouse location.
-            // Before this code can go live, we'll have to take the normals into account and remove this hack.
-            if ((*pointCloud)[currentPoint].z > 0)
-            {
-                currentPoint++;
-            }
-        }
-    }
-    (*pointCloud)[currentPoint].x = -1000;
-    (*pointCloud)[currentPoint].y = -1000;
-    (*pointCloud)[currentPoint].z = -1000;
-}
-
-void torusGenerator(Point p1, Point p2, double lighthouseAngle, Point **pointCloud)
-{
-
-    double centralAngleToIgnore = lighthouseAngle * 3;
-
-    partialTorusGenerator(p1, p2, 0, M_PI * 2, centralAngleToIgnore + M_PI, M_PI * 3, lighthouseAngle, DefaultPointsPerOuterDiameter, pointCloud);
-    //partialTorusGenerator(p1, p2, 0, M_PI * 2 / 24.0, 0, 0.5, lighthouseAngle, pointCloud);
-
-    return;
-}
-// What we're doing here is:
-// * Given a point in space
-// * And points and a lighthouse angle that implicitly define a torus
-// * for that torus, what is the toroidal angle of the plane that will go through that point in space
-// * and given that toroidal angle, what is the poloidal angle that will be directed toward that point in space?
-//
-// Given the toroidal and poloidal angles of a "good estimate" of a solution position, a caller of this function
-// will be able to "draw" the point cloud of a torus in just the surface of the torus near the point in space.
-// That way, the caller doesn't have to draw the entire torus in high resolution, just the part of the torus
-// that is most likely to contain the best solution.
-void estimateToroidalAndPoloidalAngleOfPoint(
-    Point torusP1,
-    Point torusP2,
-    double lighthouseAngle,
-    Point point,
-    float *toroidalAngle,
-    float *poloidalAngle)
-{
-    // this is the rotation matrix that shows how to rotate the torus from being in a simple "default" orientation
-    // into the coordinate system of the tracked object
-    Matrix3x3 rot = GetRotationMatrixForTorus(torusP1, torusP2);
-
-    // We take the inverse of the rotation matrix, and this now defines a rotation matrix that will take us from
-    // the tracked object coordinate system into the "easy" or "default" coordinate system of the torus.
-    // Using this will allow us to derive angles much more simply by being in a "friendly" coordinate system.
-    rot = inverseM33(rot);
-    Point origin;
-    origin.x = 0;
-    origin.y = 0;
-    origin.z = 0;
-
-    Point m = midpoint(torusP1, torusP2);
-
-    // in this new coordinate system, we'll rename all of the points we care about to have an "F" after them
-    // This will be their representation in the "friendly" coordinate system
-    Point pointF;
-
-    // Okay, I lied a little above.  In addition to the rotation matrix that we care about, there was also
-    // a translation that we did to move the origin.  If we're going to get to the "friendly" coordinate system
-    // of the torus, we need to first undo the translation, then undo the rotation.  Below, we're undoing the translation.
-    pointF.x = point.x - m.x;
-    pointF.y = point.y - m.y;
-    pointF.z = point.z - m.z;
-
-    // now we'll undo the rotation part.
-    pointF = RotateAndTranslatePoint(pointF, rot, origin);
-
-    // hooray, now pointF is in our more-friendly coordinate system.  
-
-    // Now, it's time to figure out the toroidal angle to that point.  This should be pretty easy. 
-    // We will "flatten" the z dimension to only look at the x and y values.  Then, we just need to measure the 
-    // angle between a vector to pointF and a vector along the x axis.  
-
-    *toroidalAngle = atan(pointF.y / pointF.x);
-    if (pointF.x < 0)
-    {
-        *toroidalAngle += M_PI;
-    }
-
-    // SCORE!! We've got the toroidal angle.  We're half done!
-
-    // Okay, what next...?  Now, we will need to rotate the torus *again* to make it easy to
-    // figure out the poloidal angle.  We should rotate the entire torus by the toroidal angle
-    // so that the point we're focusin on will lie on the x/z plane.  We then should translate the
-    // torus so that the center of the poloidal circle is at the origin.  At that point, it will
-    // be trivial to determine the poloidal angle-- it will be the angle on the xz plane of a 
-    // vector from the origin to the point.
-
-    // okay, instead of rotating the torus & point by the toroidal angle to get the point on
-    // the xz plane, we're going to take advantage of the radial symmetry of the torus
-    // (i.e. it's symmetric about the point we'd want to rotate it, so the rotation wouldn't 
-    // change the torus at all).  Therefore, we'll leave the torus as is, but we'll rotate the point
-    // This will only impact the x and y coordinates, and we'll use "G" as the postfix to represent
-    // this new coordinate system
-
-    Point pointG;
-    pointG.z = pointF.z;
-    pointG.y = 0;
-    pointG.x = sqrt(SQUARED(pointF.x) + SQUARED(pointF.y));
-
-    // okay, that ended up being easier than I expected.  Now that we have the point on the xZ plane,
-    // our next step will be to shift it down so that the center of the poloidal circle is at the origin.
-    // As you may have noticed, y has now gone to zero, and from here on out, we can basically treat
-    // this as a 2D problem.  I think we're getting close...
-
-    // I stole these lines from the torus generator.  Gonna need the poloidal radius.
-    double distanceBetweenPoints = distance(torusP1, torusP2); // we don't care about the coordinate system of these points because we're just getting distance.
-    double toroidalRadius = distanceBetweenPoints / (2 * tan(lighthouseAngle));
-    double poloidalRadius = sqrt(pow(toroidalRadius, 2) + pow(distanceBetweenPoints / 2, 2));
-
-    // The center of the polidal circle already lies on the z axis at this point, so we won't shift z at all. 
-    // The shift along the X axis will be the toroidal radius.  
-
-    Point pointH;
-    pointH.z = pointG.z;
-    pointH.y = pointG.y;
-    pointH.x = pointG.x - toroidalRadius;
-
-    // Okay, almost there.  If we treat pointH as a vector on the XZ plane, if we get its angle,
-    // that will be the poloidal angle we're looking for.  (crosses fingers)
-
-    *poloidalAngle = atan(pointH.z / pointH.x);
-    if (pointH.x < 0)
-    {
-        *poloidalAngle += M_PI;
-    }
-
-    // Wow, that ended up being not so much code, but a lot of interesting trig.
-    // can't remember the last time I spent so much time working through each line of code.
-
-    return;
-}
-
-void writePoint(FILE *file, double x, double y, double z, unsigned int rgb)
-{
-    fprintf(file, "%f %f %f %u\n", x, y, z, rgb);
-    pointsWritten++;
-}
-
-void updateHeader(FILE * file)
-{
-    fseek(file, 0x4C, SEEK_SET);
-    fprintf(file, "%d", pointsWritten);
-    fseek(file, 0x7C, SEEK_SET);
-    fprintf(file, "%d", pointsWritten);
-}
-void writeAxes(FILE * file)
-{
-    double scale = 200;
-    for (double i = 0; i < scale; i = i + scale / 1000)
-    {
-        writePoint(file, i, 0, 0, 255);
-    }
-    for (double i = 0; i < scale; i = i + scale/1000)
-    {
-        if ((int)(i / (scale/5)) % 2 == 1)
-        {
-            writePoint(file, 0, i, 0, 255<<8);
-        }
-    }
-    for (double i = 0; i < scale; i = i + scale / 10001)
-    {
-        if ((int)(i / (scale/10)) % 2 == 1)
-        {
-            writePoint(file, 0, 0, i, 255<<16);
-        }
-    }
-}
-
-void drawLineBetweenPoints(FILE *file, Point a, Point b, unsigned int color)
-{
-    int max = 50;
-    for (int i = 0; i < max; i++)
-    {
-        writePoint(file, 
-            (a.x*i + b.x*(max - i)) / max,
-            (a.y*i + b.y*(max - i)) / max,
-            (a.z*i + b.z*(max - i)) / max,
-            color);
-    }
-}
-
-void writePcdHeader(FILE * file)
-{
-    fprintf(file, "VERSION 0.7\n");
-    fprintf(file, "FIELDS  x y z rgb\n");
-    fprintf(file, "SIZE 4 4 4 4\n");
-    fprintf(file, "TYPE F F F U\n");
-    fprintf(file, "COUNT 1 1 1 1\n");
-    fprintf(file, "WIDTH        \n");
-    fprintf(file, "HEIGHT 1\n");
-    fprintf(file, "VIEWPOINT 0 0 0 1 0 0 0\n");
-    fprintf(file, "POINTS        \n");
-    fprintf(file, "DATA ascii\n");
-
-    //fprintf(file, "100000.0, 100000.0, 100000\n");
-
-}
-
-void writePointCloud(FILE *f, Point *pointCloud, unsigned int Color)
-{
-    Point *currentPoint = pointCloud;
-
-    while (currentPoint->x != -1000 || currentPoint->y != -1000 || currentPoint->z != -1000)
-    {
-        writePoint(f, currentPoint->x, currentPoint->y, currentPoint->z, Color);
-        currentPoint++;
-    }
-}
-
-void markPointWithStar(FILE *file, Point point, unsigned int color)
-{
-    float i;
-    for ( i = -0.8; i <= 0.8; i=i +0.0025)
-    {
-        writePoint(file, point.x + i, point.y, point.z, color);
-        writePoint(file, point.x, point.y + i, point.z, color);
-        writePoint(file, point.x, point.y, point.z + i, color);
-    }
-
-}
-
-float FindSmallestDistance(Point p, Point* cloud)
-{
-    Point *cp = cloud;
-    float smallestDistance = 10000000000000.0;
-
-    while (cp->x != -1000 || cp->y != -1000 || cp->z != -1000)
-    {
-        float distance = (SQUARED(cp->x - p.x) + SQUARED(cp->y - p.y) + SQUARED(cp->z - p.z));
-        if (distance < smallestDistance)
-        {
-            smallestDistance = distance;
-        }
-        cp++;
-    }
-    smallestDistance = sqrt(smallestDistance);
-    return smallestDistance;
-}
-
-// Given a cloud and a list of clouds, find the point on masterCloud that best matches clouds.
-Point findBestPointMatch(Point *masterCloud, Point** clouds, int numClouds)
-{
-
-    Point bestMatch;
-    float bestDistance = 10000000000000.0;
-    Point *cp = masterCloud;
-    int point = 0;
-    while (cp->x != -1000 || cp->y != -1000 || cp->z != -1000)
-    {
-        point++;
-        if (point % 100 == 0)
-        {
-            printf(".");
-        }
-        float currentDistance = 0;
-        for (int i = 0; i < numClouds; i++)
-        {
-            if (clouds[i] == masterCloud)
-            {
-                continue;
-            }
-            Point* cloud = clouds[i];
-            currentDistance += FindSmallestDistance(*cp, cloud);
-        }
-
-        if (currentDistance < bestDistance)
-        {
-            bestDistance = currentDistance;
-            bestMatch = *cp;
-        }
-        cp++;
-    }
-
-    return bestMatch;
-}
-
-
-#define MAX_POINT_PAIRS 100
-
-typedef struct
-{
-    Point a;
-    Point b;
-    double angle;
-} PointsAndAngle;
-
-double angleBetweenSensors(TrackedSensor *a, TrackedSensor *b)
-{
-    double angle = acos(cos(a->phi - b->phi)*cos(a->theta - b->theta));
-    double angle2 = acos(cos(b->phi - a->phi)*cos(b->theta - a->theta));
-
-    return angle;
-}
-double pythAngleBetweenSensors2(TrackedSensor *a, TrackedSensor *b)
-{
-    double p = (a->phi - b->phi);
-    double d = (a->theta - b->theta);
-
-    double adjd = sin((a->phi + b->phi) / 2);
-    double adjP = sin((a->theta + b->theta) / 2);
-    double pythAngle = sqrt(SQUARED(p*adjP) + SQUARED(d*adjd));
-    return pythAngle;
-}
-Point SolveForLighthouse(TrackedObject *obj)
-{
-    PointsAndAngle pna[MAX_POINT_PAIRS];
-    //Point lh = { 10, 0, 200 };
-
-    size_t pnaCount = 0;
-    for (unsigned int i = 0; i < obj->numSensors; i++)
-    {
-        for (unsigned int j = 0; j < i; j++)
-        {
-            if ( pnaCount < MAX_POINT_PAIRS)
-            {
-                pna[pnaCount].a = obj->sensor[i].point;
-                pna[pnaCount].b = obj->sensor[j].point;
-
-                pna[pnaCount].angle = pythAngleBetweenSensors2(&obj->sensor[i], &obj->sensor[j]);
-
-                float pythAngle = sqrt(SQUARED(obj->sensor[i].phi - obj->sensor[j].phi) + SQUARED(obj->sensor[i].theta - obj->sensor[j].theta));
-
-                //double tmp = angleFromPoints(pna[pnaCount].a, pna[pnaCount].b, lh);
-
-                int a=4;
-
-                pnaCount++;
-            }
-        }
-    }
-
-    //Point **pointCloud = malloc(sizeof(Point*)* pnaCount);
-    Point **pointCloud = malloc(sizeof(void*)* pnaCount);
-
-    FILE *f = fopen("pointcloud2.pcd", "wb");
-    writePcdHeader(f);
-    writeAxes(f);
-
-    for (int i = 0; i < pnaCount; i++)
-    {
-        torusGenerator(pna[i].a, pna[i].b, pna[i].angle, &(pointCloud[i]));
-        writePointCloud(f, pointCloud[i], COLORS[i%MAX_COLORS]);
-
-    }
-    //Point *pointCloud_ab = NULL;
-    //Point *pointCloud_ac = NULL;
-    //Point *pointCloud_bc = NULL;
-    //Point *pointCloud_ad = NULL;
-    //Point *pointCloud_bd = NULL;
-    //Point *pointCloud_cd = NULL;
-    //torusGenerator(a, b, angleFromPoints(a, b, lh), &pointCloud_ab);
-    //torusGenerator(a, c, angleFromPoints(a, c, lh), &pointCloud_ac);
-    //torusGenerator(b, c, angleFromPoints(b, c, lh), &pointCloud_bc);
-    //torusGenerator(a, d, angleFromPoints(a, d, lh), &pointCloud_ad);
-    //torusGenerator(b, d, angleFromPoints(b, d, lh), &pointCloud_bd);
-    //torusGenerator(c, d, angleFromPoints(c, d, lh), &pointCloud_cd);
-
-
-    //markPointWithStar(f, lh, 0xFF0000);
-
-    //drawLineBetweenPoints(f, a, b, 255);
-    //drawLineBetweenPoints(f, b, c, 255);
-    //drawLineBetweenPoints(f, a, c, 255);
-    //drawLineBetweenPoints(f, a, d, 255);
-    //drawLineBetweenPoints(f, b, d, 255);
-    //drawLineBetweenPoints(f, c, d, 255);
-
-    Point bestMatchA = findBestPointMatch(pointCloud[0], pointCloud, pnaCount);
-
-    markPointWithStar(f, bestMatchA, 0xFF0000);
-
-    // Now, let's add an extra patch or torus near the point we just found.
-
-    float toroidalAngle = 0;
-    float poloidalAngle = 0;
-
-
-
-    Point **pointCloud2 = malloc(sizeof(void*)* pnaCount);
-
-    for (int i = 0; i < pnaCount; i++)
-    {
-        estimateToroidalAndPoloidalAngleOfPoint(
-            pna[i].a,
-            pna[i].b,
-            pna[i].angle,
-            bestMatchA,
-            &toroidalAngle,
-            &poloidalAngle);
-
-        partialTorusGenerator(pna[i].a, pna[i].b, toroidalAngle - 0.2, toroidalAngle + 0.2, poloidalAngle - 0.2, poloidalAngle + 0.2, pna[i].angle, 720, &(pointCloud2[i]));
-
-        writePointCloud(f, pointCloud2[i], COLORS[i%MAX_COLORS]);
-
-    }
-
-    Point bestMatchB = findBestPointMatch(pointCloud2[0], pointCloud2, pnaCount);
-    markPointWithStar(f, bestMatchB, 0x00FF00);
-
-
-    Point **pointCloud3 = malloc(sizeof(void*)* pnaCount);
-
-    for (int i = 0; i < pnaCount; i++)
-    {
-        estimateToroidalAndPoloidalAngleOfPoint(
-            pna[i].a,
-            pna[i].b,
-            pna[i].angle,
-            bestMatchB,
-            &toroidalAngle,
-            &poloidalAngle);
-
-        partialTorusGenerator(pna[i].a, pna[i].b, toroidalAngle - 0.01, toroidalAngle + 0.01, poloidalAngle - 0.01, poloidalAngle + 0.01, pna[i].angle, 5000, &(pointCloud3[i]));
-
-        writePointCloud(f, pointCloud3[i], COLORS[i%MAX_COLORS]);
-
-    }
-
-    Point bestMatchC = findBestPointMatch(pointCloud3[0], pointCloud3, pnaCount);
-    markPointWithStar(f, bestMatchC, 0xFFFFFF);
-
-
-
-    updateHeader(f);
-
-    fclose(f);
-
-    return bestMatchA;
-}
-
-static Point makeUnitPoint(Point *p)
-{
-    Point newP;
-    float r = sqrt(p->x*p->x + p->y*p->y + p->z*p->z);
-    newP.x = p->x / r;
-    newP.y = p->y / r;
-    newP.z = p->z / r;
-
-    return newP;
-}
-
-static double getPhi(Point p)
-{
-//    double phi = acos(p.z / (sqrt(p.x*p.x + p.y*p.y + p.z*p.z)));
-//    double phi = atan(sqrt(p.x*p.x + p.y*p.y)/p.z);
-    double phi = atan(p.x / p.z);
-    return phi;
-}
-
-static double getTheta(Point p)
-{
-    //double theta = atan(p.y / p.x);
-    double theta = atan(p.x / p.y);
-    return theta;
-}
-
-// subtraction
-static Point PointSub(Point a, Point b)
-{
-    Point newPoint;
-
-    newPoint.x = a.x - b.x;
-    newPoint.y = a.y - b.y;
-    newPoint.z = a.z - b.z;
-
-    return newPoint;
-}
+#include <assert.h>
+#include "TorusLocalizer.h"
+#include <memory.h>
+#include <time.h>
 
 void testRealData()
 {
 
     TrackedObject *to;
 
-    to = malloc(sizeof(TrackedObject)+(14 * sizeof(TrackedSensor)));
+    to = malloc(sizeof(TrackedObject) + (14 * sizeof(TrackedSensor)));
 
     to->numSensors = 14;
 
@@ -660,7 +27,7 @@ void testRealData()
     to->sensor[1].point.z = 0.0347871;
     to->sensor[1].theta = 190442.1726;
     to->sensor[1].phi = 160237.0121;
-        
+
     //6	194906.0781	159445.4121
     to->sensor[2].point.x = 0.0243163;
     to->sensor[2].point.y = 0.0200039;
@@ -745,7 +112,7 @@ void testRealData()
     to->sensor[13].theta = 200340.6642;
     to->sensor[13].phi = 157639.705;
 
-	
+
 
     for (int i = 0; i < 14; i++)
     {
@@ -754,21 +121,309 @@ void testRealData()
         to->sensor[i].phi = to->sensor[i].phi / 48000000 * 60 * M_PI * 2;
     }
 
-    Point foundLh = SolveForLighthouse(to);
+    Point foundLh = SolveForLighthouse(to, 0);
 
+    free(to);
+}
+
+
+void testRealData2()
+{
+
+    TrackedObject *to;
+
+    to = malloc(sizeof(TrackedObject) + (50 * sizeof(TrackedSensor)));
+
+
+    int i = 0;
+
+    // 0
+    to->sensor[i].point.x = 0.0851814;
+    to->sensor[i].point.y = 0.0170621;
+    to->sensor[i].point.z = 0.0464036;
+    to->sensor[i].theta = 173656.227498;
+    to->sensor[i].phi = 204736.018055;
+    i++;
+
+    //// 1
+    //to->sensor[i].point.x = 0.0929987;
+    //to->sensor[i].point.y = -9.77111e-05;
+    //to->sensor[i].point.z = 0.034903;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 2
+    //to->sensor[i].point.x = 0.0866358;
+    //to->sensor[i].point.y = 0.01655;
+    //to->sensor[i].point.z = 0.0205866;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 3
+    //to->sensor[i].point.x = 0.0896136;
+    //to->sensor[i].point.y = 0.0291564;
+    //to->sensor[i].point.z = 0.0296088;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    // 4
+    to->sensor[i].point.x = 0.0799671;
+    to->sensor[i].point.y = 0.0452252;
+    to->sensor[i].point.z = 0.0347871;
+    to->sensor[i].theta = 172643.620157;
+    to->sensor[i].phi = 205062.361095;
+    i++;
+
+    // 5
+    to->sensor[i].point.x = 0.050822;
+    to->sensor[i].point.y = 0.0525379;
+    to->sensor[i].point.z = 0.0332851;
+    to->sensor[i].theta = 172551.577338;
+    to->sensor[i].phi = 206242.149097;
+    i++;
+
+    // 6
+    to->sensor[i].point.x = 0.0243163;
+    to->sensor[i].point.y = 0.0200039;
+    to->sensor[i].point.z = 0.0594331;
+    to->sensor[i].theta = 174201.746577;
+    to->sensor[i].phi = 207033.149388;
+    i++;
+
+    // 7
+    to->sensor[i].point.x = 0.047366;
+    to->sensor[i].point.y = 0.0335892;
+    to->sensor[i].point.z = 0.0535793;
+    to->sensor[i].theta = 173608.039324;
+    to->sensor[i].phi = 206211.706756;
+    i++;
+
+    //// 8
+    //to->sensor[i].point.x = 0.0477814;
+    //to->sensor[i].point.y = -0.0340002;
+    //to->sensor[i].point.z = 0.0534839;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    // 9
+    to->sensor[i].point.x = 0.0579574;
+    to->sensor[i].point.y = -3.65101e-05;
+    to->sensor[i].point.z = 0.056517;
+    to->sensor[i].theta = 174465.920186;
+    to->sensor[i].phi = 205663.607746;
+    i++;
+
+    //// 10
+    //to->sensor[i].point.x = 0.027572;
+    //to->sensor[i].point.y = -0.051707;
+    //to->sensor[i].point.z = 0.046649;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 11
+    //to->sensor[i].point.x = 0.0514582;
+    //to->sensor[i].point.y = -0.0529347;
+    //to->sensor[i].point.z = 0.0331235;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 12
+    //to->sensor[i].point.x = 0.0805458;
+    //to->sensor[i].point.y = -0.0452235;
+    //to->sensor[i].point.z = 0.0346787;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 13
+    //to->sensor[i].point.x = 0.0899552;
+    //to->sensor[i].point.y = -0.0293091;
+    //to->sensor[i].point.z = 0.0296856;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 14
+    //to->sensor[i].point.x = 0.0868583;
+    //to->sensor[i].point.y = -0.0166452;
+    //to->sensor[i].point.z = 0.0205461;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 15
+    //to->sensor[i].point.x = 0.0852848;
+    //to->sensor[i].point.y = -0.0171755;
+    //to->sensor[i].point.z = 0.0464536;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    // 16
+    to->sensor[i].point.x = -0.047897;
+    to->sensor[i].point.y = 0.0336478;
+    to->sensor[i].point.z = 0.053597;
+    to->sensor[i].theta = 174012.703466;
+    to->sensor[i].phi = 209888.311881;
+    i++;
+
+    // 17
+    to->sensor[i].point.x = -0.0245155;
+    to->sensor[i].point.y = 0.0200543;
+    to->sensor[i].point.z = 0.0593949;
+    to->sensor[i].theta = 174408.549956;
+    to->sensor[i].phi = 208907.731508;
+    i++;
+
+    //// 18
+    //to->sensor[i].point.x = -0.0512064;
+    //to->sensor[i].point.y = 0.0528224;
+    //to->sensor[i].point.z = 0.0331849;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    // 19
+    to->sensor[i].point.x = -0.0802602;
+    to->sensor[i].point.y = 0.0452913;
+    to->sensor[i].point.z = 0.0348134;
+    to->sensor[i].theta = 173321.909991;
+    to->sensor[i].phi = 211270.631625;
+    i++;
+
+    //// 20
+    //to->sensor[i].point.x = -0.0897543;
+    //to->sensor[i].point.y = 0.0293923;
+    //to->sensor[i].point.z = 0.0296238;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 21
+    //to->sensor[i].point.x = -0.0867611;
+    //to->sensor[i].point.y = 0.0166726;
+    //to->sensor[i].point.z = 0.020728;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 22
+    //to->sensor[i].point.x = -0.0929696;
+    //to->sensor[i].point.y = 0.000195598;
+    //to->sensor[i].point.z = 0.0349093;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 23
+    //to->sensor[i].point.x = -0.0853892;
+    //to->sensor[i].point.y = 0.0173502;
+    //to->sensor[i].point.z = 0.0463133;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 24
+    //to->sensor[i].point.x = -0.0852688;
+    //to->sensor[i].point.y = -0.0171002;
+    //to->sensor[i].point.z = 0.0462514;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 25
+    //to->sensor[i].point.x = -0.086695;
+    //to->sensor[i].point.y = -0.0164564;
+    //to->sensor[i].point.z = 0.0207053;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 26
+    //to->sensor[i].point.x = -0.0895888;
+    //to->sensor[i].point.y = -0.0292942;
+    //to->sensor[i].point.z = 0.0297272;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 27
+    //to->sensor[i].point.x = -0.0801986;
+    //to->sensor[i].point.y = -0.0452252;
+    //to->sensor[i].point.z = 0.0346869;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 28
+    //to->sensor[i].point.x = -0.0509185;
+    //to->sensor[i].point.y = -0.0527843;
+    //to->sensor[i].point.z = 0.0331621;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    //// 29
+    //to->sensor[i].point.x = -0.0272585;
+    //to->sensor[i].point.y = -0.0516152;
+    //to->sensor[i].point.z = 0.0468868;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+    //i++;
+
+    // 30
+    to->sensor[i].point.x = -0.0580757;
+    to->sensor[i].point.y = 6.80145e-06;
+    to->sensor[i].point.z = 0.0565004;
+    to->sensor[i].theta = 174963.711040;
+    to->sensor[i].phi = 210130.630751;
+    //i++;
+
+    //// 31
+    //to->sensor[i].point.x = -0.0475571;
+    //to->sensor[i].point.y = -0.0339427;
+    //to->sensor[i].point.z = 0.0535213;
+    //to->sensor[i].theta = ;
+    //to->sensor[i].phi = ;
+
+    to->numSensors = i;
+
+
+    to->numSensors = 4;
+
+
+    for (int j = 0; j < i; j++)
+    {
+        // convert from clock cycles to degrees
+        to->sensor[j].theta = to->sensor[j].theta / 48000000 * 60 * M_PI * 2;
+        to->sensor[j].phi = to->sensor[j].phi / 48000000 * 60 * M_PI * 2;
+    }
+
+    Point foundLh = SolveForLighthouse(to, 1);
+
+    printf("(%f,%f,%f)\n", foundLh.x, foundLh.y, foundLh.z);
+
+    getchar();
     free(to);
 }
 
 int main()
 {
-    //testRealData();
+    testRealData2();
 
+    exit(1);
     //Point lh = { 0, 0, 0 };
     Point lh = { 0, 200, 10 };
 
     TrackedObject *to;
 
-    to = malloc(sizeof(TrackedObject)+6 * sizeof(TrackedSensor));
+    to = malloc(sizeof(TrackedObject) + 6 * sizeof(TrackedSensor));
 
     to->numSensors = 6;
     to->sensor[0].point.x = 18.0;
@@ -809,7 +464,7 @@ int main()
     //}
 #define RADIANS(x) (x / 180 * M_PI)
 
-//    0:(79.138, 91.254) 1 : (83.977, 92.572) 2 : (82.497, 89.744) 3 : (84.135, 86.627) 4 : (80.580, 87.252) 5 : (77.591, 86.291)
+    //    0:(79.138, 91.254) 1 : (83.977, 92.572) 2 : (82.497, 89.744) 3 : (84.135, 86.627) 4 : (80.580, 87.252) 5 : (77.591, 86.291)
     //to->sensor[0].theta = RADIANS(79.138);
     //to->sensor[0].phi = RADIANS(91.254);
     //to->sensor[1].theta = RADIANS(83.977);
@@ -823,7 +478,7 @@ int main()
     //to->sensor[5].theta = RADIANS(77.591);
     //to->sensor[5].phi = RADIANS(86.291);
 
-//    0:(79.821, 87.904) 1 : (78.427, 93.046) 2 : (81.371, 91.689) 3 : (84.387, 93.179) 4 : (83.767, 89.468) 5 : (84.603, 86.709)
+    //    0:(79.821, 87.904) 1 : (78.427, 93.046) 2 : (81.371, 91.689) 3 : (84.387, 93.179) 4 : (83.767, 89.468) 5 : (84.603, 86.709)
     //to->sensor[0].theta = RADIANS(79.821);
     //to->sensor[0].phi = RADIANS(87.904);
     //to->sensor[1].theta = RADIANS(78.427);
@@ -837,7 +492,7 @@ int main()
     //to->sensor[5].theta = RADIANS(84.603);
     //to->sensor[5].phi = RADIANS(86.709);
 
-//0:(83.614, 88.358) 1 : (78.345, 86.965) 2 : (79.828, 89.899) 3 : (78.185, 93.070) 4 : (80.894, 91.510) 5 : (84.688, 93.237)
+    //0:(83.614, 88.358) 1 : (78.345, 86.965) 2 : (79.828, 89.899) 3 : (78.185, 93.070) 4 : (80.894, 91.510) 5 : (84.688, 93.237)
     //to->sensor[0].theta = RADIANS(83.614);
     //to->sensor[0].phi = RADIANS(88.358);
     //to->sensor[1].theta = RADIANS(78.345);
@@ -851,7 +506,7 @@ int main()
     //to->sensor[5].theta = RADIANS(84.688);
     //to->sensor[5].phi = RADIANS(93.237);
 
-//0:(88.350, 135.574) 1 : (95.278, 136.934) 2 : (93.468, 134.097) 3 : (95.171, 131.030) 4 : (90.511, 131.695) 5 : (86.909, 130.729)
+    //0:(88.350, 135.574) 1 : (95.278, 136.934) 2 : (93.468, 134.097) 3 : (95.171, 131.030) 4 : (90.511, 131.695) 5 : (86.909, 130.729)
     //to->sensor[0].theta = RADIANS(88.350);
     //to->sensor[0].phi = RADIANS(135.574);
     //to->sensor[1].theta = RADIANS(95.278);
@@ -881,70 +536,82 @@ int main()
 
     to->numSensors = 3;
 
-    Point foundLh = SolveForLighthouse(to);
+    time_t startTime = time(NULL);
+
+    for (int i = 0; i < 500; i++)
+    {
+        Point foundLh = SolveForLighthouse(to, 0);
+    }
+
+    time_t endTime = time(NULL);
+
+    time_t duration = difftime(endTime, startTime);
+
+
+
 
     exit(1);
 
-    FILE *f = fopen("pointcloud.pcd", "wb");
+    //FILE *f = fopen("pointcloud.pcd", "wb");
 
-    Point a = { 5.0, 0.0 , 0};
-    Point b = { 0.0, 5.0 , 0};
-    //Point c = { 3.54, 3.54, 5.0 };
-    Point c = { 0, 0, 5.0 };
-    Point d = { 0, 5, 5.0 };
-    //Point lh = { 50, 50, 50 };
-
-
-    Point *pointCloud_ab = NULL;
-    Point *pointCloud_ac = NULL;
-    Point *pointCloud_bc = NULL;
-    Point *pointCloud_ad = NULL;
-    Point *pointCloud_bd = NULL;
-    Point *pointCloud_cd = NULL;
-    torusGenerator(a, b, angleFromPoints(a, b, lh), &pointCloud_ab);
-    torusGenerator(a, c, angleFromPoints(a, c, lh), &pointCloud_ac);
-    torusGenerator(b, c, angleFromPoints(b, c, lh), &pointCloud_bc);
-    torusGenerator(a, d, angleFromPoints(a, d, lh), &pointCloud_ad);
-    torusGenerator(b, d, angleFromPoints(b, d, lh), &pointCloud_bd);
-    torusGenerator(c, d, angleFromPoints(c, d, lh), &pointCloud_cd);
-
-    writePcdHeader(f);
-
-    writeAxes(f);
-
-    writePointCloud(f, pointCloud_ab, 0x00FFFF);
-    writePointCloud(f, pointCloud_ac, 0xFFFFFF);
-    writePointCloud(f, pointCloud_bc, 0xFF00FF);
-    writePointCloud(f, pointCloud_ad, 0x000080);
-    writePointCloud(f, pointCloud_bd, 0x008000);
-    writePointCloud(f, pointCloud_cd, 0x800000);
-
-    markPointWithStar(f, lh, 0xFF0000);
-
-    drawLineBetweenPoints(f, a, b, 255);
-    drawLineBetweenPoints(f, b, c, 255);
-    drawLineBetweenPoints(f, a, c, 255);
-    drawLineBetweenPoints(f, a, d, 255);
-    drawLineBetweenPoints(f, b, d, 255);
-    drawLineBetweenPoints(f, c, d, 255);
-
-    Point *clouds[6];
-
-    clouds[0] = pointCloud_ab;
-    clouds[1] = pointCloud_ac;
-    clouds[2] = pointCloud_bc;
-    clouds[3] = pointCloud_ad;
-    clouds[4] = pointCloud_bd;
-    clouds[5] = pointCloud_cd;
-
-    Point bestMatchA = findBestPointMatch(pointCloud_ab, clouds, 6);
-
-    markPointWithStar(f, bestMatchA, 0x00FFFF);
-
-    updateHeader(f);
+    //Point a = { 5.0, 0.0, 0 };
+    //Point b = { 0.0, 5.0, 0 };
+    ////Point c = { 3.54, 3.54, 5.0 };
+    //Point c = { 0, 0, 5.0 };
+    //Point d = { 0, 5, 5.0 };
+    ////Point lh = { 50, 50, 50 };
 
 
-    fclose(f);
+    //Point *pointCloud_ab = NULL;
+    //Point *pointCloud_ac = NULL;
+    //Point *pointCloud_bc = NULL;
+    //Point *pointCloud_ad = NULL;
+    //Point *pointCloud_bd = NULL;
+    //Point *pointCloud_cd = NULL;
+    //torusGenerator(a, b, angleFromPoints(a, b, lh), &pointCloud_ab);
+    //torusGenerator(a, c, angleFromPoints(a, c, lh), &pointCloud_ac);
+    //torusGenerator(b, c, angleFromPoints(b, c, lh), &pointCloud_bc);
+    //torusGenerator(a, d, angleFromPoints(a, d, lh), &pointCloud_ad);
+    //torusGenerator(b, d, angleFromPoints(b, d, lh), &pointCloud_bd);
+    //torusGenerator(c, d, angleFromPoints(c, d, lh), &pointCloud_cd);
+
+    //writePcdHeader(f);
+
+    //writeAxes(f);
+
+    //writePointCloud(f, pointCloud_ab, 0x00FFFF);
+    //writePointCloud(f, pointCloud_ac, 0xFFFFFF);
+    //writePointCloud(f, pointCloud_bc, 0xFF00FF);
+    //writePointCloud(f, pointCloud_ad, 0x000080);
+    //writePointCloud(f, pointCloud_bd, 0x008000);
+    //writePointCloud(f, pointCloud_cd, 0x800000);
+
+    //markPointWithStar(f, lh, 0xFF0000);
+
+    //drawLineBetweenPoints(f, a, b, 255);
+    //drawLineBetweenPoints(f, b, c, 255);
+    //drawLineBetweenPoints(f, a, c, 255);
+    //drawLineBetweenPoints(f, a, d, 255);
+    //drawLineBetweenPoints(f, b, d, 255);
+    //drawLineBetweenPoints(f, c, d, 255);
+
+    //Point *clouds[6];
+
+    //clouds[0] = pointCloud_ab;
+    //clouds[1] = pointCloud_ac;
+    //clouds[2] = pointCloud_bc;
+    //clouds[3] = pointCloud_ad;
+    //clouds[4] = pointCloud_bd;
+    //clouds[5] = pointCloud_cd;
+
+    //Point bestMatchA = findBestPointMatch(pointCloud_ab, clouds, 6);
+
+    //markPointWithStar(f, bestMatchA, 0x00FFFF);
+
+    //updateHeader(f);
+
+
+    //fclose(f);
 
     return 0;
 }
